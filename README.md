@@ -1,31 +1,126 @@
-The chef-repo
-===============
-All installations require a central workspace known as the chef-repo. This is a place where primitive objects--cookbooks, roles, environments, data bags, and chef-repo configuration files--are stored and managed.
+mediawiki
+=========
 
-The chef-repo should be kept under version control, such as [git](http://git-scm.org), and then managed as if it were source code.
+Demonstation  of  creation of  Chef   cookbooks  for  a  LAMP  Stack  deployment  in  ami
 
-Knife Configuration
--------------------
-Knife is the [command line interface](https://docs.chef.io/knife.html) for Chef. The chef-repo contains a .chef directory (which is a hidden directory by default) in which the Knife configuration file (knife.rb) is located. This file contains configuration settings for the chef-repo.
 
-The knife.rb file is automatically created by the starter kit. This file can be customized to support configuration settings used by [cloud provider options](https://docs.chef.io/plugin_knife.html) and custom [knife plugins](https://docs.chef.io/plugin_knife_custom.html).
+This cookbook  uses Amazon AWS EC2 linux images with Chef 0.10.0  to create four total CentOS systems running in Amazon EC2.
 
-Also located inside the .chef directory are .pem files, which contain private keys used to authenticate requests made to the Chef server. The USERNAME.pem file contains a private key unique to the user (and should never be shared with anyone). The ORGANIZATION-validator.pem file contains a private key that is global to the entire organization (and is used by all nodes and workstations that send requests to the Chef server).
+    1 haproxy software  load balancer.
+    2  Media wiki  servers  (  Apache2 web servers running mod_php)
+    1 MySQL 5.0   database  server.
 
-More information about knife.rb configuration options can be found in [the documentation for knife](https://docs.chef.io/config_rb_knife.html).
+The PHP mediaapp used in this guide is MediaWiki 1.18alpha
 
-Cookbooks
----------
-A cookbook is the fundamental unit of configuration and policy distribution. A sample cookbook can be found in `cookbooks/starter`. After making changes to any cookbook, you must upload it to the Chef server using knife:
 
-    $ knife upload cookbooks/starter
 
-For more information about cookbooks, see the example files in the `starter` cookbook.
+The mediaapp cookbook will perform the following steps:
 
-Roles
------
-Roles provide logical grouping of cookbooks and other roles. A sample role can be found at `roles/starter.rb`.
+    1. Install required packages and pears for the project
+    2. set up the deployment scaffolding
+    3. creates LocalSettings.php file with the dbserver connection information if required
+    4. performs a revision-based deploy
+    5. install Apache2 and mod_php
+    6. create an mediaapp specific virtual host configuration file.
 
-Getting Started
--------------------------
-Now that you have the chef-repo ready to go, check out [Learn Chef](https://learn.chef.io/) to proceed with your workstation setup. If you have any questions about Chef you can always ask [our support team](https://www.chef.io/support/) for a helping hand.
+Environment Setup
+=================
+Have  your config  file   setup   corectly  
+	Knife configuration file (knife.rb)
+        validation certificate (thoughtworks-int-validator.pem)
+        user certificate (pratikdam.pem) to ~/chef-repo/.chef/. 
+
+Do the  following  steps   to   get  the   config   files  in the     right  directory 
+
+	mkdir ~/mediawiki/.chef
+	cp ~/chef-repo/.chef/knife.rb ~/mediawiki/.chef
+	cp ~/chef-repo/.chef/USERNAME.pem ~/mediawiki/.chef
+	cp ~/chef-repo/.chef/ORGNAME-validator.pem ~/mediawiki/.chef
+
+Add the Amazon AWS credentials to the Knife configuration file.
+
+ Ensure   that   amazon-ec2   can  comunicate   with knife   by   the   settings  in the  ~/mediawiki/.chef/knife.rb
+
+
+knife[:aws_access_key_id] = "praikdam"
+knife[:aws_secret_access_key] =  ""
+
+
+
+In addition to the credentials, two additional things need to be configured in the AWS account.Configure the default security group to allow incoming connections for the following ports.
+
+    22 - ssh
+    80 - haproxy load balancer
+    22002 - haproxy administrative interface
+    8080 - apache2 web servers running mod_php
+
+
+Develop   Cookbooks
+==================
+
+The mediawiki also   creates   cookbooks  for  the  sake   of  modularity  .Details   of  the    functions   of  various     cookbooks  are   there  in the  cookbook  README 
+
+	yum
+	git
+	mysql
+	apache2
+	haproxy
+	mediawiki
+
+Upload all the cookbooks to the Hosted Chef server   using the   command    knife cookbook upload -a
+
+Server Roles
+=============
+All the required roles have been created in the mediawiki repository. They are in the roles/ directory.
+
+	base.rb
+	mediawiki_dbserver_master.rb
+	mediawiki.rb
+	mediawiki_load_balancer.rb
+
+Upload all the roles to the Hosted Chef server.
+rake roles
+
+Data Bag Item
+============
+The mediawiki repository contains a data bag item that has all the information required to deploy and configure the MediaWiki mediaapp from source using the recipes in the mediaapp and dbserver cookbooks.
+The data bag name is apps and the item name is mediawiki. Upload this to the Hosted Chef server.
+
+	knife data bag create apps
+	knife data bag from file apps mediawiki.json
+
+
+Launch  Application
+===================
+
+First, launch the dbserver instance.
+
+	1. knife ec2 server create -G default -I ami-e565ba8c  -f m1.micro  -S mediawiki -i ~/.ssh/pratikdam.pem -x centos   -r 'role[base],role[mediawiki_dbserver_master]'
+
+Once the dbserver master is up, launch one node that will create the dbserver schema and set up the dbserver with default data.
+
+	2. knife ec2 server create -G default -I  mi-e565ba8c   -f m1.micro  -S mediawiki -i ~/.ssh/pratikdam.pem -x centos  -r 'role[base],role[mediawiki],recipe[mediawiki::db_bootstrap]' 
+
+Launch the second mediaapp instance w/o the mediawiki::db_bootstrap recipe.
+
+	3. knife ec2 server create -G default -I ami-e565ba8c -f m1.micro  -S mediawiki -i ~/.ssh/pratikdam.pem -x centos   -r 'role[base],role[mediawiki]' 
+
+Once the second mediaapp instance is up, launch the load balancer.
+
+	4. knife ec2 server create -G default -I ami-e565ba8c -f m1.micro -S mediawiki -i ~/.ssh/pratikdam.pem -x centos  -r 'role[base],role[mediawiki_load_balancer]'
+
+
+
+Verification
+============
+
+Once complete, we would   have four instances running in EC2 with MySQL, MediaWiki and haproxy up and available to serve traffic.
+Knife will output the fully qualified domain name of the instance when the commands complete. Navigate to the public fully qualified domain name on port 80.
+
+http://ec2-23-21-19-43.compute-1.amazonaws.com/
+
+The login is admin and the password is mediawiki.
+
+You can access the haproxy admin interface at:
+
+http://ec2-23-21-19-43.compute-1.amazonaws.com:22002/
